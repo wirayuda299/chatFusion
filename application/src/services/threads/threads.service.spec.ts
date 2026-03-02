@@ -7,7 +7,9 @@ describe('ThreadsService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [ThreadsService],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     service = module.get<ThreadsService>(ThreadsService);
   });

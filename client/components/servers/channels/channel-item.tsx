@@ -41,12 +41,12 @@ export default function ChannelItem({
   const reset = useCallback(() => {
     setSelectedChannel(null)
     setIsOpen(false)
-  }, [])
+  }, [setSelectedChannel])
 
   const handleClose = useCallback(() => {
     router.push(`/server/${server.id}`)
     reset()
-  }, [])
+  }, [reset, router, server.id])
 
 
   return (

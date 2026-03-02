@@ -60,7 +60,11 @@ export default function ChannelsDetail(props: Props) {
       }
 
     })
-  }, [socket]);
+    return () => {
+      socket?.off('set-message');
+      socket?.off('set-banned-members');
+    }
+  }, [router, socket, userId]);
 
   return (
     <>

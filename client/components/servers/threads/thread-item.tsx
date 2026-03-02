@@ -33,7 +33,7 @@ export default function ThreadItem({ thread, serverId, channelId, socket, select
       serverId,
       channelId
     })
-  }, [])
+  }, [channelId, serverId, socket])
 
   const handleUpdate = async (e: FormEvent) => {
     e.preventDefault()

@@ -7,7 +7,9 @@ describe('ThreadsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ThreadsController],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     controller = module.get<ThreadsController>(ThreadsController);
   });
