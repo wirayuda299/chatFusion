@@ -34,7 +34,7 @@ export default function ChannelsMessages({
       channelId,
     })
 
-  }, [])
+  }, [channelId, serverId, socket])
 
   return (
     <div className='px-2 pb-10 min-h-dvh max-h-dvh md:min-h-screen md:max-h-screen '>

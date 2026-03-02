@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { DatabaseService } from './database.service';
 
@@ -7,7 +8,15 @@ describe('DatabaseService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [DatabaseService],
-    }).compile();
+    })
+      .useMocker((token) => {
+        if (token === ConfigService) {
+          return { get: jest.fn() };
+        }
+
+        return {};
+      })
+      .compile();
 
     service = module.get<DatabaseService>(DatabaseService);
   });

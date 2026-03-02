@@ -42,7 +42,7 @@ export default function ServersMenuDesktop({ server, categories }: Props) {
   const params = useParams()
   const [isLoading, setIsLoading] = useState(false)
 
-  const channels = useMemo(() => categories.filter(channel => channel.channel_type === 'text').map(c => c.channel_id).flat(), [server.id])
+  const channels = useMemo(() => categories.filter(channel => channel.channel_type === 'text').map(c => c.channel_id).flat(), [categories])
 
   const { windowWidth } = useWindowResize();
   if (windowWidth < 768) return null;

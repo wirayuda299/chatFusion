@@ -7,7 +7,9 @@ describe('FileUploadController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [FileUploadController],
-    }).compile();
+    })
+      .useMocker(() => ({}))
+      .compile();
 
     controller = module.get<FileUploadController>(FileUploadController);
   });
