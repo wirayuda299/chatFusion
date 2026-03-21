@@ -34,87 +34,6 @@ export class MessagesService {
     });
   }
 
-  async getReplies(
-    parentMessageId: string,
-    channelId: string,
-    serverId: string
-  ): Promise<Message[]> {
-    try {
-      const replies = await this.db.pool.query(
-        `SELECT
-        mr.parent_message_id as parent_message_id,
-        mr.id as reply_id,
-        mr.author as author_id,
-        m."content" as message,
-        m.id as message_id,
-        m.is_read as is_read,
-        m.user_id as author,
-        m.image_url as media_image,
-        m."type" as message_type,
-        m.image_asset_id as media_image_asset_id,
-        m.created_at as created_at,
-        m.updated_at as update_at,
-        sp.username as username
-      FROM messages_replies as mr 
-      JOIN messages as m ON m.id = mr.message_id
-      JOIN server_profile as sp ON sp.user_id = m.user_id AND sp.server_id = $2
-      WHERE mr.parent_message_id = $1 
-      ORDER BY m.created_at ASC`,
-        [parentMessageId, serverId]
-      );
-
-      const replyPromises = replies.rows.map(async (reply) => {
-        const [reactions, role, threads] = await Promise.all([
-          this.reactionService.getReactions(reply.message_id),
-          this.roleService.getCurrentUserRole(reply.user_id, serverId),
-          this.db.pool.query(
-            `SELECT
-            sp.username as username,
-            sp.user_id as author_id,
-            t.name as thread_name,
-            t.id as thread_id,
-            t.channel_id as channel_id
-          FROM threads as t
-          JOIN server_profile as sp ON sp.user_id = t.author AND sp.server_id = $2
-          WHERE t.message_id = $1`,
-            [reply.message_id, serverId]
-          ),
-        ]);
-
-        reply.reactions = reactions;
-        reply.role = role.data;
-        reply.threads = threads.rows || [];
-
-        return reply;
-      });
-
-      const allReplies = await Promise.all(replyPromises);
-
-      const subRepliesPromises = allReplies.map(async (reply) => {
-        const subReplies = await this.getReplies(
-          reply.message_id,
-          channelId,
-          serverId
-        );
-
-        for (const subReply of subReplies) {
-          const reactions = await this.reactionService.getReactions(
-            subReply.message_id
-          );
-          subReply.reactions = reactions;
-        }
-
-        return [reply, ...subReplies];
-      });
-
-      const nestedReplies = await Promise.all(subRepliesPromises);
-      const flattenedReplies = nestedReplies.flat();
-
-      return flattenedReplies;
-    } catch (error) {
-      throw error;
-    }
-  }
 
   async sendMessage(
     content: string,
@@ -129,9 +48,15 @@ export class MessagesService {
         const {
           rows: [message],
         } = await this.db.pool.query(
-          `INSERT INTO messages(content, user_id, image_url, image_asset_id, type)
-           VALUES($1, $2, $3, $4, $5)
-           RETURNING id`,
+          `INSERT INTO messages(
+  content,
+  user_id,
+  image_url,
+  image_asset_id,
+  type,
+  parent_message_id
+)
+VALUES($1, $2, $3, $4, $5, NULL)`,
           [content, user_id, imageUrl ?? '', imageAssetId ?? '', 'channel']
         );
         console.log({ message })
@@ -162,28 +87,27 @@ export class MessagesService {
     type: string
   ) {
     try {
-      await this.db.pool.query('begin');
-      const {
-        rows: [message],
-      } = await this.db.pool.query(
-        `INSERT INTO messages("content", user_id, image_url, image_asset_id, type)
-       VALUES($1, $2, $3, $4, $5)
-       returning id`,
-        [content, user_id, imageUrl, imageAssetId, type]
-      );
+      await this.db.pool.query('BEGIN');
 
       await this.db.pool.query(
-        `insert into messages_replies (parent_message_id, author, message_id)
-        values($1,$2,$3)`,
-        [parentMessageId, user_id, message.id]
+        `INSERT INTO messages(
+        content,
+        user_id,
+        image_url,
+        image_asset_id,
+        type,
+        parent_message_id
+      )
+      VALUES($1, $2, $3, $4, $5, $6)`,
+        [content, user_id, imageUrl, imageAssetId, type, parentMessageId]
       );
-      await this.db.pool.query('commit');
+
+      await this.db.pool.query('COMMIT');
     } catch (error) {
-      await this.db.pool.query('rollback');
+      await this.db.pool.query('ROLLBACK');
       throw error;
     }
   }
-
   async getThreadByMessage(messageId: string, serverId: string) {
     try {
       const threads = await this.db.pool.query(
@@ -219,65 +143,68 @@ export class MessagesService {
 
   async getMessageByChannelId(channel_id: string, serverId: string) {
     try {
-      const messages = await this.db.pool.query(
+      const { rows } = await this.db.pool.query(
         `
-        SELECT 
-        cm.message_id AS message_id,
-        m."content" AS message,
-        m.is_read AS is_read,
-        m.user_id AS author,
-        m.image_url AS media_image,
-        m."type" AS message_type,
-        m.image_asset_id AS media_image_asset_id,
-        m.created_at AS created_at,
-        m.updated_at AS update_at,
-        sp.username AS username
-        FROM channel_messages AS cm
-        JOIN messages AS m ON m.id = cm.message_id 
-        JOIN server_profile AS sp ON sp.user_id = m.user_id AND sp.server_id = $1
-        WHERE cm.channel_id = $2 AND m.type = 'channel'
-        ORDER BY m.created_at ASC
+      SELECT 
+        m.id as message_id,
+        m.content as message,
+        m.is_read,
+        m.user_id as author,
+        m.image_url as media_image,
+        m.type as message_type,
+        m.image_asset_id as media_image_asset_id,
+        m.created_at,
+        m.updated_at,
+        m.parent_message_id,
+        sp.username
+      FROM channel_messages cm
+      JOIN messages m ON m.id = cm.message_id
+      JOIN server_profile sp 
+        ON sp.user_id = m.user_id AND sp.server_id = $1
+      WHERE cm.channel_id = $2
+      ORDER BY m.created_at ASC
       `,
         [serverId, channel_id]
       );
 
-      const messagePromises = messages.rows.map(async (message) => {
-        const [reactions, threads, role] = await Promise.all([
-          this.reactionService.getReactions(message.message_id),
-          this.getThreadByMessage(message.message_id, serverId),
-          this.roleService.getCurrentUserRole(message.author, serverId),
-        ]);
+      // Build map for parent lookup (O(1))
+      const messageMap = new Map();
+      rows.forEach((m) => messageMap.set(m.message_id, m));
 
-        message.role = role.data;
-        message.threads = threads || [];
-        message.reactions = reactions;
+      const enriched = await Promise.all(
+        rows.map(async (message) => {
+          const [reactions, threads, role] = await Promise.all([
+            this.reactionService.getReactions(message.message_id),
+            this.getThreadByMessage(message.message_id, serverId),
+            this.roleService.getCurrentUserRole(message.author, serverId),
+          ]);
 
-        const replies = await this.getReplies(
-          message.message_id,
-          channel_id,
-          serverId
-        );
+          message.reactions = reactions;
+          message.threads = threads || [];
+          message.role = role.data;
 
-        return [message, ...replies];
-      });
+          // attach parent preview (important for UI)
+          if (message.parent_message_id) {
+            const parent = messageMap.get(message.parent_message_id);
+            message.parent_preview = parent
+              ? {
+                id: parent.message_id,
+                content: parent.message,
+                username: parent.username,
+              }
+              : null;
+          }
 
-      const allMessageResults = await Promise.all(messagePromises);
-      const allMessages = allMessageResults.flat();
-
-      allMessages.sort(
-        (a, b) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          return message;
+        })
       );
 
-      const groupedMessages = groupReactionsByEmoji(allMessages);
-      const finalMessages = this.addLabelsToMessages(groupedMessages);
-
-      return finalMessages;
+      const groupedMessages = groupReactionsByEmoji(enriched);
+      return this.addLabelsToMessages(groupedMessages);
     } catch (error) {
       throw error;
     }
   }
-
   async pinMessage(messageId: string, channel_id: string, pinnedBy: string) {
     try {
       const messageExists = await this.db.pool.query(
@@ -482,99 +409,67 @@ export class MessagesService {
     }
   }
 
-  async fetchReplies(
-    messageId: string,
-    messages: any[],
-    conversationId: string
-  ) {
-    const replies = await this.db.pool.query(
-      `SELECT
-          mr.parent_message_id as parent_message_id,
-          mr.id as reply_id,
-          mr.author as author_id,
-          m."content" as message,
-          m.id as message_id,
-          m.is_read as is_read,
-          m.user_id as author,
-          m.image_url as media_image,
-          m."type" as message_type,
-          m.image_asset_id as media_image_asset_id,
-          m.created_at as created_at,
-          m.updated_at as update_at,
-          u.username as username
-          FROM messages_replies as mr 
-          JOIN messages as m ON m.id = mr.message_id
-          JOIN users as u on u.id = m.user_id 
-          WHERE mr.parent_message_id = $1 
-          ORDER BY m.created_at ASC`,
-      [messageId]
-    );
-
-    for await (const reply of replies.rows) {
-      reply.conversation_id = conversationId;
-      const replyReactions = await this.reactionService.getReactions(
-        reply.message_id
-      );
-      reply.reactions = replyReactions;
-      messages.push(reply);
-      await this.fetchReplies(reply.message_id, messages, conversationId);
-    }
-  }
 
   async getPersonalMessage(
     conversationId: string | null,
     userId: string | null
   ) {
     try {
-      const messages = [];
-
-      const baseMessages = await this.db.pool.query(
+      const { rows } = await this.db.pool.query(
         `SELECT
-        pm.conversation_id as conversation_id,
+        pm.conversation_id,
         m.content AS message,
-        m.is_read AS is_read,
+        m.is_read,
         m.user_id AS author,
         m.id as message_id,
         m.image_url AS media_image,
         m.type AS message_type,
         m.image_asset_id AS media_image_asset_id,
-        m.created_at AS created_at,
-        m.updated_at AS update_at,
-        u.username AS username
-        FROM personal_messages AS pm
-        JOIN messages AS m ON m.id = pm.message_id
-        JOIN users AS u ON u.id = m.user_id
-        WHERE pm.conversation_id = COALESCE($1, pm.conversation_id)
-        OR m.user_id = COALESCE($2, m.user_id)`,
+        m.created_at,
+        m.updated_at,
+        m.parent_message_id,
+        u.username
+      FROM personal_messages pm
+      JOIN messages m ON m.id = pm.message_id
+      JOIN users u ON u.id = m.user_id
+      WHERE pm.conversation_id = COALESCE($1, pm.conversation_id)
+      OR m.user_id = COALESCE($2, m.user_id)
+      ORDER BY m.created_at ASC`,
         [conversationId, userId]
       );
 
-      for await (const message of baseMessages.rows) {
-        const reactions = await this.reactionService.getReactions(
-          message.message_id
-        );
-        message.reactions = reactions;
-        messages.push(message);
-        await this.fetchReplies(
-          message.message_id,
-          messages,
-          message.conversation_id
-        );
-      }
+      const map = new Map();
+      rows.forEach((m) => map.set(m.message_id, m));
 
-      messages.sort(
-        (a, b) =>
-          new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      const enriched = await Promise.all(
+        rows.map(async (message) => {
+          const reactions = await this.reactionService.getReactions(
+            message.message_id
+          );
+
+          message.reactions = reactions;
+
+          if (message.parent_message_id) {
+            const parent = map.get(message.parent_message_id);
+            message.parent_preview = parent
+              ? {
+                id: parent.message_id,
+                content: parent.message,
+                username: parent.username,
+              }
+              : null;
+          }
+
+          return message;
+        })
       );
 
-      const groupedMessages = groupReactionsByEmoji(messages);
-      const allMessages = this.addLabelsToMessages(groupedMessages);
-      return allMessages;
+      const grouped = groupReactionsByEmoji(enriched);
+      return this.addLabelsToMessages(grouped);
     } catch (error) {
       throw error;
     }
   }
-
   async pinPersonalMessage(
     messageId: string,
     pinnedBy: string,
